@@ -7,5 +7,12 @@ a = int(input('Введите цифру для переменной a: '))
 b = int(input('Введите цифру для переменной b: '))
 c = int(input('Введите цифру для переменной c: '))
 
-print('Минимальное число: ', min(a, b, c))
+min_number = a
+
+if b < min_number:
+    min_number = b
+elif c < min_number:
+    min_number = c
+
+print('Минимальное число: ', min_number)
 
