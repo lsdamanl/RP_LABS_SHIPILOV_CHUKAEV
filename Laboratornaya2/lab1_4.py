@@ -5,24 +5,37 @@
 #ii. Количество всех чисел последовательности (решить задачу
 #используя циклическую конструкцию while)
 
-numbers = []
+
 sum_of_numbers = 0
 count_of_numbers = 0
 
-print("Введите последовательность целых чисел (для завершения введите пустую строку):")
+print("Введите последовательность целых чисел. Для завершения введите 'q':")
+
 while True:
     user_input = input()
-    if user_input == "" or not user_input.isnumeric():
+    if user_input == 'q' or user_input == '':
         break
-    number = int(user_input)
-    numbers.append(number)
 
+    is_valid = True
+    start_index = 0
 
-index = 0
-while index < len(numbers):
-    sum_of_numbers += numbers[index]
-    count_of_numbers += 1
-    index += 1
+    if user_input and user_input[0] == '-':
+        if len(user_input) == 1:
+            is_valid = False
+        start_index = 1
 
-print(f"Сумма всех чисел последовательности: {sum_of_numbers}")
-print(f"Количество всех чисел последовательности: {count_of_numbers}")
+    for i in range(start_index, len(user_input)):
+        char = user_input[i]
+        if not (char >= '0' and char <= '9'): #Сравнение по юникоду (48-57)
+            is_valid = False
+            break
+
+    if is_valid:
+        num = int(user_input)
+        sum_of_numbers += num
+        count_of_numbers += 1
+    else:
+        print("Ошибка: введено не число!")
+
+print(f"Сумма: {sum_of_numbers}")
+print(f"Количество: {count_of_numbers}")
