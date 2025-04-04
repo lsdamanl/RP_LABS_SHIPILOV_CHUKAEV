@@ -9,7 +9,7 @@
 sum_of_numbers = 0
 count_of_numbers = 0
 
-print("Введите последовательность целых чисел. Для завершения введите 'q':")
+print("Введите последовательность целых чисел (вводите числа по одному). Для завершения введите 'q':")
 
 while True:
     user_input = input()
@@ -25,8 +25,7 @@ while True:
         start_index = 1
 
     for i in range(start_index, len(user_input)):
-        char = user_input[i]
-        if not (char >= '0' and char <= '9'): #Сравнение по юникоду (48-57)
+        if not user_input[i].isdigit():
             is_valid = False
             break
 
