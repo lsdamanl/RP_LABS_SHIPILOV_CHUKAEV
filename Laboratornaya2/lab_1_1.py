@@ -11,7 +11,7 @@ min_number = a
 
 if b < min_number:
     min_number = b
-elif c < min_number:
+if c < min_number:
     min_number = c
 
 print('Минимальное число: ', min_number)
