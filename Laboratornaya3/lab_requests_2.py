@@ -12,7 +12,9 @@ app = Flask(__name__)
 @app.route('/number/')
 def number():
     param = float(request.args.get('param'))
-    return jsonify({"result": random.random() * param})
+    random_num = random.randint(1, 10)
+    operation = random.choice(['+', '-', '*', '/'])
+    return jsonify({"result": random.random() * param, "operation": operation, 'random_number': random_num})
 
 #2) Реализовать POST эндпоинт /number/, который принимает в теле
 # запроса JSON с полем jsonParam.Вернуть сгенерировать рандомно
@@ -21,25 +23,24 @@ def number():
 
 @app.route('/number/', methods=['POST'])
 def number_post():
-    data = request.get_json()
-    json_param = data['jsonParam']
-    random_num = random.random()
+    data = request.get_json() or {}
+    json_param = data.get('jsonParam')
+    if json_param is None:
+        return jsonify({"error": "jsonParam is required"}), 400
+    try:
+        json_param = float(json_param)
+    except:
+        return jsonify({"error": "jsonParam must be a number"}), 400
 
+    random_num = random.randint(1, 10)
     operation = random.choice(['+', '-', '*', '/'])
 
-    if operation == '+':
-        result = random_num + json_param
-    elif operation == '-':
-        result = random_num - json_param
-    elif operation == '*':
-        result = random_num * json_param
-    else:
-        result = random_num / json_param
+    result = json_param * random_num
 
     return jsonify({
-        "random_number": random_num,
-        "operation": operation,
         "input_value": json_param,
+        "operation": operation,
+        "random_number": random_num,
         "result": result
     })
 
@@ -48,12 +49,12 @@ def number_post():
 
 @app.route('/number/', methods=['DELETE'])
 def delete_number():
-    random_num = random.random()
+    random_num = random.randint(1, 10)
     operation = random.choice(['+', '-', '*', '/'])
 
     return jsonify({
-        "random_number": random_num,
-        "operation": operation
+        "operation": operation,
+        "random_number": random_num
     })
 
 
