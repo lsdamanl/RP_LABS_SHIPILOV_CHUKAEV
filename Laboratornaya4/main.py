@@ -47,7 +47,7 @@ async def get_rate(message: Message, state: FSMContext):
         data = await state.get_data()
         currencies[data['name']] = rate
         logger.info(f"Сохранена валюта: {data['name']} = {rate}")
-        await message.answer(f"Сохранено: {data['name']} = {rate}")
+        await message.answer(f"Сохранено: {data['name']} = {rate}\n\n{currencies}")
         await state.clear()
     except ValueError:
         logger.warning("Некорректный курс")
