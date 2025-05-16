@@ -1,110 +1,205 @@
 import os
 import logging
+import psycopg2
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
-bot_token = os.getenv('API_TOKEN')
+bot_token = os.getenv("API_TOKEN")
 bot = Bot(token=bot_token)
 dp = Dispatcher()
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger()
-
-# Словарь для валют
-currencies = {}
-
-class CurrencyStates(StatesGroup):
-    waiting_name = State()
-    waiting_rate = State()
-
-@dp.message(Command("start"))
-async def start(message: Message):
-    logger.info(f"Пользователь {message.from_user.id} начал работу")
-    await message.answer("Привет! Для работы с валютами введи /save_currency")
+logger = logging.getLogger(__name__)
 
 
-@dp.message(Command("save_currency"))
-async def save_start(message: Message, state: FSMContext):
-    logger.info(f"Пользователь {message.from_user.id} начал сохранение валюты")
-    await message.answer("Введите название валюты (например: EUR, USD, CNY или др.):")
-    await state.set_state(CurrencyStates.waiting_name)
+# Подключение к БД
+def get_db_connection():
+    return psycopg2.connect(
+        host="localhost",
+        port=5432,
+        database="RP_LAB_5",
+        user="postgres",
+        password="12345"
+    )
 
 
-@dp.message(CurrencyStates.waiting_name)
-async def get_name(message: Message, state: FSMContext):
-    logger.info(f"Пользователь ввёл название: {message.text}")
-    await state.update_data(name=message.text.upper())
-    data = await state.get_data()
-    name = data['name']
-    await message.answer(f"Теперь введите курс валюты {name} к рублю:")
-    await state.set_state(CurrencyStates.waiting_rate)
+# Состояния
+class ManageCurrencyStates(StatesGroup):
+    waiting_action = State()
+    waiting_currency_name = State()
+    waiting_new_rate = State()
 
 
-@dp.message(CurrencyStates.waiting_rate)
-async def get_rate(message: Message, state: FSMContext):
-    try:
-        rate = float(message.text.replace(',', '.'))
-        data = await state.get_data()
-        currencies[data['name']] = rate
-        logger.info(f"Сохранена валюта: {data['name']} = {rate}")
-        await message.answer(f"Сохранено: 1 {data['name']} = {rate} ₽")
-        await state.clear()
-        await message.answer("Для конвертации валюты введи /convert")
-    except ValueError:
-        logger.warning("Некорректный курс")
-        await message.answer("Ошибка! Введи число:")
-
-
-# Задание 2
 class ConvertStates(StatesGroup):
     waiting_currency_name = State()
     waiting_amount = State()
 
 
+# Проверка администратора
+def is_admin(chat_id):
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM admins WHERE chat_id = %s", (str(chat_id),))
+            return cur.fetchone() is not None
+
+
+
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    commands = ["start", "get_currencies", "convert"]
+    if is_admin(message.chat.id):
+        commands.insert(1, "manage_currency")
+    await message.answer("Добро пожаловать! Доступные команды:\n" + "\n".join(f"/{cmd}" for cmd in commands))
+
+
+
+@dp.message(Command("get_currencies"))
+async def cmd_get_currencies(message: Message):
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT currency_name, rate FROM currencies")
+            rows = cur.fetchall()
+
+    if not rows:
+        await message.answer("Нет сохранённых валют.")
+    else:
+        text = "\n".join([f"{name}: {rate} ₽" for name, rate in rows])
+        await message.answer("Список валют:\n" + text)
+
+
+
 @dp.message(Command("convert"))
-async def convert_start(message: Message, state: FSMContext):
-    logger.info(f"Пользователь {message.from_user.id} начал конвертацию")
-    if not currencies:
-        await message.answer("Нет сохраненных валют. Сначала добавьте валюту через /save_currency")
-        return
-
-
-    currencies_list = "\n".join([f"• {name}: {rate} ₽" for name, rate in currencies.items()])
-    await message.answer(f"Введите название валюты для конвертации \n\n Список доступных валют:\n{currencies_list}")
+async def cmd_convert(message: Message, state: FSMContext):
+    await message.answer("Введите название валюты:")
     await state.set_state(ConvertStates.waiting_currency_name)
 
 
 @dp.message(ConvertStates.waiting_currency_name)
-async def get_currency_for_conversion(message: Message, state: FSMContext):
-    currency_name = message.text.upper()
-    if currency_name not in currencies:
-        await message.answer(f"Валюта {currency_name} не найдена. Введите одно из: {', '.join(currencies.keys())}")
-        return
+async def process_currency_name(message: Message, state: FSMContext):
+    currency = message.text.upper()
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT rate FROM currencies WHERE currency_name = %s", (currency,))
+            result = cur.fetchone()
 
-    logger.info(f"Пользователь выбрал валюту: {currency_name}")
-    await state.update_data(currency_name=currency_name)
-    await message.answer(f"Введите сумму в {currency_name} для конвертации в рубли:")
+    if not result:
+        await message.answer("Валюта не найдена. Попробуйте ещё раз.")
+        return
+    await state.update_data(currency_name=currency, rate=float(result[0]))
+    await message.answer(f"Введите сумму в {currency}:")
     await state.set_state(ConvertStates.waiting_amount)
 
 
 @dp.message(ConvertStates.waiting_amount)
-async def convert_currency(message: Message, state: FSMContext):
+async def process_amount(message: Message, state: FSMContext):
     try:
-        amount = float(message.text.replace(',', '.'))
-        data = await state.get_data()
-        currency_name = data['currency_name']
-        rate = currencies[currency_name]
-
-        result = amount * rate
-        logger.info(f"Конвертация: {amount} {currency_name} = {result} ₽")
-        await message.answer(f"{amount} {currency_name} = {result:.2f} ₽ по курсу {rate} ₽")
-        await state.clear()
+        amount = float(message.text.replace(",", "."))
     except ValueError:
-        logger.warning("Некорректная сумма для конвертации")
-        await message.answer("Ошибка! Введите число:")
+        await message.answer("Введите корректное число.")
+        return
+    data = await state.get_data()
+    rubles = amount * data["rate"]
+    await message.answer(f"{amount} {data['currency_name']} = {rubles:.2f} ₽")
+    await state.clear()
+
+
+# Команда /manage_currency
+@dp.message(Command("manage_currency"))
+async def cmd_manage_currency(message: Message, state: FSMContext):
+    if not is_admin(message.chat.id):
+        await message.answer("Нет доступа к команде.")
+        return
+
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Добавить валюту"), KeyboardButton(text="Удалить валюту"),
+                   KeyboardButton(text="Изменить курс валюты")]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("Выберите действие:", reply_markup=keyboard)
+    await state.set_state(ManageCurrencyStates.waiting_action)
+
+
+@dp.message(ManageCurrencyStates.waiting_action)
+async def process_action(message: Message, state: FSMContext):
+    action = message.text
+    if action not in ["Добавить валюту", "Удалить валюту", "Изменить курс валюты"]:
+        await message.answer("Неверный выбор. Повторите.")
+        return
+
+    await state.update_data(action=action)
+    await message.answer("Введите название валюты:")
+    await state.set_state(ManageCurrencyStates.waiting_currency_name)
+
+
+@dp.message(ManageCurrencyStates.waiting_currency_name)
+async def process_currency_name_admin(message: Message, state: FSMContext):
+    name = message.text.upper()
+    data = await state.get_data()
+    action = data["action"]
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT rate FROM currencies WHERE currency_name = %s", (name,))
+            result = cur.fetchone()
+
+    if action == "Добавить валюту":
+        if result:
+            await message.answer("Данная валюта уже существует.")
+            await state.clear()
+        else:
+            await state.update_data(currency_name=name)
+            await message.answer("Введите курс к рублю:")
+            await state.set_state(ManageCurrencyStates.waiting_new_rate)
+
+    elif action == "Удалить валюту":
+        if not result:
+            await message.answer("Валюта не найдена.")
+        else:
+            with get_db_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM currencies WHERE currency_name = %s", (name,))
+                    conn.commit()
+            await message.answer(f"Валюта {name} удалена.")
+        await state.clear()
+
+    elif action == "Изменить курс валюты":
+        if not result:
+            await message.answer("Валюта не найдена.")
+            await state.clear()
+        else:
+            await state.update_data(currency_name=name)
+            await message.answer("Введите новый курс:")
+            await state.set_state(ManageCurrencyStates.waiting_new_rate)
+
+
+@dp.message(ManageCurrencyStates.waiting_new_rate)
+async def process_new_rate(message: Message, state: FSMContext):
+    try:
+        rate = float(message.text.replace(",", "."))
+    except ValueError:
+        await message.answer("Введите корректное число.")
+        return
+
+    data = await state.get_data()
+    name = data["currency_name"]
+    action = data["action"]
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            if action == "Добавить валюту":
+                cur.execute("INSERT INTO currencies (currency_name, rate) VALUES (%s, %s)", (name, rate))
+                await message.answer(f"Валюта {name} успешно добавлена.")
+            elif action == "Изменить курс валюты":
+                cur.execute("UPDATE currencies SET rate = %s WHERE currency_name = %s", (rate, name))
+                await message.answer(f"Курс валюты {name} обновлён.")
+            conn.commit()
+    await state.clear()
+
 
 
 async def main():
@@ -114,4 +209,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())
