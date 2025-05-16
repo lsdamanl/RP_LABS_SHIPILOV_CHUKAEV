@@ -37,7 +37,7 @@ async def is_admin(chat_id: int) -> bool:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{ROLE_MANAGER_URL}/check_admin",
-                json={"chat_id": str(chat_id)}  # FastAPI ожидает строку (по вашей модели)
+                json={"chat_id": str(chat_id)}
             )
             return response.status_code == 200 and response.json().get("is_admin", False)
     except Exception as e:
