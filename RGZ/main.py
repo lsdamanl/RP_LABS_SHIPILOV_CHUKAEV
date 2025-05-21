@@ -23,29 +23,10 @@ def get_db_connection():
     return psycopg2.connect(
         host="localhost",
         port=5432,
-        database="finance_bot",
+        database="RGZ_RPP",
         user="postgres",
         password="12345"
     )
-
-
-# SQL для создания таблиц (для pgAdmin)
-"""
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    chat_id BIGINT UNIQUE NOT NULL,
-    name VARCHAR(100) NOT NULL
-);
-
-CREATE TABLE operations (
-    id SERIAL PRIMARY KEY,
-    date DATE NOT NULL,
-    sum DECIMAL(10, 2) NOT NULL,
-    chat_id BIGINT NOT NULL,
-    type_operation VARCHAR(10) NOT NULL,
-    CONSTRAINT fk_user FOREIGN KEY(chat_id) REFERENCES users(chat_id)
-);
-"""
 
 
 # Состояния
@@ -61,6 +42,10 @@ class AddOperationStates(StatesGroup):
 
 class OperationsStates(StatesGroup):
     waiting_currency = State()
+
+
+class SetBudgetStates(StatesGroup):
+    waiting_amount = State()
 
 
 # Проверка зарегистрирован ли пользователь
@@ -89,7 +74,7 @@ def get_exchange_rate(currency):
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    commands = ["start", "reg", "add_operation", "operations"]
+    commands = ["start", "reg", "add_operation", "operations", "setbudget"]
     await message.answer(
         "Добро пожаловать в финансовый бот! Доступные команды:\n" +
         "\n".join(f"/{cmd}" for cmd in commands)
@@ -165,12 +150,7 @@ async def process_operation_amount(message: Message, state: FSMContext):
         return
 
     await state.update_data(sum=amount)
-    await message.answer("Введите дату операции в формате ДД.ММ.ГГГГ (или нажмите кнопку для сегодняшней даты):",
-                         reply_markup=ReplyKeyboardMarkup(
-                             keyboard=[[KeyboardButton(text="Сегодня")]],
-                             resize_keyboard=True,
-                             one_time_keyboard=True
-                         ))
+    await message.answer("Введите дату операции в формате ДД.ММ.ГГГГ")
     await state.set_state(AddOperationStates.waiting_date)
 
 
@@ -183,7 +163,7 @@ async def process_operation_date(message: Message, state: FSMContext):
         try:
             op_date = datetime.strptime(date_str, "%d.%m.%Y").date()
         except ValueError:
-            await message.answer("Неверный формат даты. Используйте ДД.ММ.ГГГГ или нажмите кнопку 'Сегодня'.")
+            await message.answer("Неверный формат даты. Используйте ДД.ММ.ГГГГ.")
             return
 
     data = await state.get_data()
@@ -241,29 +221,86 @@ async def process_operations_currency(message: Message, state: FSMContext):
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
+                # Получаем операции
                 cur.execute(
                     "SELECT date, sum, type_operation FROM operations WHERE chat_id = %s ORDER BY date DESC",
                     (chat_id,)
                 )
                 operations = cur.fetchall()
 
-        if not operations:
-            await message.answer("У вас пока нет операций.")
-            await state.clear()
-            return
+                # Получаем бюджет на текущий месяц
+                current_month = datetime.now().date().replace(day=1)
+                cur.execute(
+                    "SELECT amount FROM budget WHERE chat_id = %s AND month = %s",
+                    (chat_id, current_month)
+                )
+                budget = cur.fetchone()
 
         response = [f"Ваши операции в {currency}:"]
+
+        # Добавляем операции в ответ
         for op in operations:
             date, amount, op_type = op
-            converted_amount = amount / exchange_rate if currency != "RUB" else amount
+            converted_amount = float(amount) / exchange_rate if currency != "RUB" else amount
             response.append(
                 f"{date.strftime('%d.%m.%Y')} - {converted_amount:.2f} {currency} - {op_type}"
             )
 
+        # Добавляем информацию о бюджете, если он установлен
+        if budget:
+            budget_amount = float(budget[0])
+            converted_budget = budget_amount / exchange_rate if currency != "RUB" else budget_amount
+            response.append(f"\nБюджет на текущий месяц: {converted_budget:.2f} {currency}")
+        else:
+            response.append("\nБюджет на текущий месяц не установлен.")
+
         await message.answer("\n".join(response))
     except Exception as e:
-        logger.error(f"Error getting operations: {e}")
-        await message.answer("Произошла ошибка при получении операций. Попробуйте позже.")
+        logger.error(f"Error getting operations or budget: {e}")
+        await message.answer("Произошла ошибка при получении данных. Попробуйте позже.")
+
+    await state.clear()
+
+
+# Добавляем обработчик команды /setbudget
+@dp.message(Command("setbudget"))
+async def cmd_set_budget(message: Message, state: FSMContext):
+    if not is_registered(message.chat.id):
+        await message.answer("Вы не зарегистрированы. Используйте команду /reg.")
+        return
+
+    await message.answer("Введите сумму бюджета на текущий месяц в рублях:")
+    await state.set_state(SetBudgetStates.waiting_amount)
+
+@dp.message(SetBudgetStates.waiting_amount)
+async def process_budget_amount(message: Message, state: FSMContext):
+    try:
+        amount = float(message.text.replace(",", "."))
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("Пожалуйста, введите корректную сумму (положительное число).")
+        return
+
+    chat_id = message.chat.id
+    current_month = datetime.now().date().replace(day=1)  # Первое число текущего месяца
+
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Используем INSERT ON CONFLICT для обновления существующей записи
+                cur.execute(
+                    """INSERT INTO budget (month, amount, chat_id)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (chat_id, month) DO UPDATE
+                       SET amount = EXCLUDED.amount""",
+                    (current_month, amount, chat_id)
+                )
+                conn.commit()
+        await message.answer(f"Бюджет на текущий месяц успешно установлен в размере {amount:.2f} RUB!")
+    except Exception as e:
+        logger.error(f"Error setting budget: {e}")
+        await message.answer("Произошла ошибка при установке бюджета. Попробуйте позже.")
 
     await state.clear()
 
